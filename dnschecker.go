@@ -484,40 +484,66 @@ func performDNSCheck(domain string, filename string, parallel bool) {
 	scanner := bufio.NewScanner(fp)
 
 	if parallel {
-		var wg sync.WaitGroup
-		var mu sync.Mutex
+		type result struct {
+			output   string
+			ok       bool
+			untested int
+		}
 
+		numWorkers := runtime.NumCPU()
+		jobs := make(chan string, 100)
+		results := make(chan result, 100)
+		var wg sync.WaitGroup
+
+		// Start workers
+		for w := 0; w < numWorkers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for line := range jobs {
+					output, ok, untested := processLine(line, domain)
+					results <- result{output, ok, untested}
+				}
+			}()
+		}
+
+		// Feed jobs
+		var lines []string
 		for scanner.Scan() {
 			line := scanner.Text()
-			if len(line) == 0 {
-				continue
+			if len(line) > 0 {
+				lines = append(lines, line)
 			}
-			wg.Add(1)
-			go func(line string) {
-				defer wg.Done()
+		}
+		if err := scanner.Err(); err != nil {
+			fmt.Println("Error while reading file")
+			// Do not return here, let the summary be printed
+		}
 
-				output, ok, untested := processLine(line, domain)
-				if output == "" {
-					return
-				}
+		go func() {
+			for _, line := range lines {
+				jobs <- line
+			}
+			close(jobs)
+		}()
 
-				mu.Lock()
-				defer mu.Unlock()
-
-				fmt.Print(output)
-				// Explicitly flush stdout to ensure immediate output
-				os.Stdout.Sync()
-
-				if untested > 0 {
-					count_untested += untested
-				} else if ok {
+		// Collect results
+		for i := 0; i < len(lines); i++ {
+			res := <-results
+			if res.output != "" {
+				fmt.Print(res.output)
+				if res.untested > 0 {
+					count_untested += res.untested
+				} else if res.ok {
 					count_ok++
 				} else {
 					count_err++
 				}
-			}(line)
+			}
 		}
+		close(results)
 		wg.Wait()
+
 	} else {
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -539,11 +565,10 @@ func performDNSCheck(domain string, filename string, parallel bool) {
 				count_err++
 			}
 		}
-	}
-
-	if err = scanner.Err(); err != nil {
-		fmt.Println("Error while reading file")
-		return
+		if err := scanner.Err(); err != nil {
+			fmt.Println("Error while reading file")
+			return
+		}
 	}
 
 	fmt.Printf("-----------------\n")
@@ -646,12 +671,14 @@ func getInputsInteractively() (string, string) {
 	history := loadHistory()
 	var domain string
 	if len(history) > 0 {
+		fmt.Print("[ 途中で終了するには Ctrl+C ]\n")
 		fmt.Println("最近使ったドメイン:")
 		for i, h := range history {
 			fmt.Printf("  %d: %s\n", i+1, h)
 		}
 		fmt.Print("番号を選ぶか、新しいドメインを入力してください: ")
 	} else {
+		fmt.Print("[ 途中で終了するには Ctrl+C ]\n")
 		fmt.Print("ドメイン名を入力してください (Enterで確定): ")
 	}
 	input, _ := reader.ReadString('\n')
@@ -731,20 +758,22 @@ func getInputsInteractively() (string, string) {
 		fmt.Println() // 改行
 	} else {
 		// デフォルトは手動入力
-		fmt.Print("Value-domainのDNS設定を貼り付けてください（Enterでチェックを実行）:\n")
+		fmt.Print("Value-domainのDNS設定を貼り付けてください\n")
+		fmt.Print("入力が終わったら空行でEnterを押してください（Enterを2回押してください）:\n")
+		var lines []string
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
-				break // 空行で入力終了
+				break
 			}
-			fileContent += line + "\n"
+			lines = append(lines, line)
 		}
-
 		if err := scanner.Err(); err != nil {
 			fmt.Println("標準入力からの読み込み中にエラーが発生しました:", err)
 			os.Exit(1)
 		}
+		fileContent = strings.Join(lines, "\n")
 	}
 
 	// ファイルの内容を一時ファイルに書き込む
