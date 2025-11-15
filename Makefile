@@ -12,7 +12,7 @@ mac:
 	
 lin: 
 	# Linux x64
-	#GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dnschecker.linux-x64 dnschecker.go
+	GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dnschecker.linux-x64 dnschecker.go
 	# For ARM64 Linux
 	#GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dnschecker.linux-arm64 dnschecker.go
 
@@ -26,6 +26,7 @@ zip:
 
 clean: 
 	go clean
+	rm -f dnschecker
 	rm -f dnschecker.exe
 	rm -f dnschecker.mac*
 	rm -f dnschecker.linux*
